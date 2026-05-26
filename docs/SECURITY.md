@@ -51,7 +51,34 @@ Run before every release:
 9. Dependencies reviewed (`cargo audit` / `npm audit` in manual security review cadence).
 10. Deployment runbook completed on testnet before mainnet promotion.
 
-## 3. Responsible Disclosure
+## 3. Dependency Audit Schedule
+
+Supply-chain attacks target dependencies. We audit on two tracks:
+
+| Track | Trigger | Tool |
+|-------|---------|------|
+| Automated CI | Every push / PR to `main` | `cargo audit --deny warnings` + `npm audit --audit-level=high` |
+| Scheduled monthly | 1st of each month at 06:00 UTC (GitHub Actions cron) | Same tools |
+| Pre-release manual | Before every production deployment | Human review of `cargo audit` + `npm audit` output |
+
+**Remediation policy:**
+- **Critical / High** — must be fixed or dependency removed before merge.
+- **Moderate** — fix within the next sprint; create a tracking issue immediately.
+- **Low** — address opportunistically; document in the issue tracker.
+
+To run audits locally:
+```bash
+# Rust
+cd contracts/stellar-give
+cargo install cargo-audit --locked
+cargo audit
+
+# Frontend
+cd frontend
+npm audit --audit-level=high
+```
+
+## 4. Responsible Disclosure
 
 If you discover a vulnerability:
 

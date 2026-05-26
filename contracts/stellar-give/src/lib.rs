@@ -54,6 +54,8 @@ pub enum ContractError {
     ReentrancyDetected = 9,
     EmptyTitle = 10,
     NothingToClaim = 11,
+    /// Token transfer failed — revert donation, no state changes persist.
+    TokenTransferFailed = 12,
 }
 
 fn next_id_key() -> Symbol {
@@ -92,9 +94,11 @@ fn write_campaign(env: &Env, campaign: &Campaign) {
         .set(&campaign_key(campaign.id), campaign);
 }
 
+/// Sets a temporary-storage lock for the current invocation context.
+/// Returns `ReentrancyDetected` if the lock is already held, preventing
+/// re-entrant state mutations.
 fn enter_lock(env: &Env) -> Result<(), ContractError> {
     let key = lock_key();
-    // Temporary lock prevents re-entrant state changes in the same execution context.
     if env.storage().temporary().get::<_, bool>(&key).unwrap_or(false) {
         return Err(ContractError::ReentrancyDetected);
     }
@@ -102,6 +106,8 @@ fn enter_lock(env: &Env) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Releases the reentrancy lock unconditionally.  Called on every exit path
+/// (success and failure) to guarantee the lock is not left held.
 fn exit_lock(env: &Env) {
     env.storage().temporary().remove(&lock_key());
 }
@@ -131,12 +137,18 @@ fn sync_status(env: &Env, campaign: &mut Campaign) {
     }
 }
 
+/// Validates that `token_address` implements the Soroban Asset Contract (SEP-41)
+/// interface by calling two lightweight read methods.  Returns `InvalidToken`
+/// if either call fails, preventing campaigns from being created with
+/// non-compliant or malicious token contracts.
 fn validate_token_contract(env: &Env, token_address: &Address) -> Result<(), ContractError> {
-    // Validate token interface by calling a standard SEP-41 read method.
-    if token::TokenClient::new(env, token_address)
-        .try_decimals()
-        .is_err()
-    {
+    let client = token::TokenClient::new(env, token_address);
+    // Both calls must succeed — a malicious contract that panics on either
+    // will cause this to return InvalidToken.
+    if client.try_decimals().is_err() {
+        return Err(ContractError::InvalidToken);
+    }
+    if client.try_symbol().is_err() {
         return Err(ContractError::InvalidToken);
     }
     Ok(())
@@ -164,35 +176,44 @@ impl StellarGiveContract {
         if deadline <= env.ledger().timestamp() {
             return Err(ContractError::InvalidDeadline);
         }
-        validate_token_contract(&env, &accepted_token)?;
 
-        let id = read_next_id(&env);
-        let next_id = id.checked_add(1).ok_or(ContractError::InvalidAmount)?;
-        write_next_id(&env, next_id);
+        // Lock before any cross-contract calls to block re-entrant creation
+        // attempts from a malicious token's validate path.
+        enter_lock(&env)?;
+        let result = (|| {
+            validate_token_contract(&env, &accepted_token)?;
 
-        let campaign = Campaign {
-            id,
-            creator: creator.clone(),
-            beneficiary: beneficiary.clone(),
-            title,
-            target_amount,
-            raised_amount: 0,
-            deadline,
-            accepted_token: accepted_token.clone(),
-            status: CampaignStatus::Active,
-        };
+            let id = read_next_id(&env);
+            let next_id = id.checked_add(1).ok_or(ContractError::InvalidAmount)?;
+            write_next_id(&env, next_id);
 
-        write_campaign(&env, &campaign);
-        env.events().publish(
-            (symbol_short!("created"),),
-            CreatedEvent {
+            let campaign = Campaign {
                 id,
-                creator,
-                target_amount: campaign.target_amount,
-            },
-        );
+                creator: creator.clone(),
+                beneficiary: beneficiary.clone(),
+                title,
+                target_amount,
+                raised_amount: 0,
+                deadline,
+                accepted_token: accepted_token.clone(),
+                status: CampaignStatus::Active,
+            };
 
-        Ok(id)
+            write_campaign(&env, &campaign);
+            env.events().publish(
+                (symbol_short!("created"),),
+                CreatedEvent {
+                    id,
+                    creator,
+                    target_amount: campaign.target_amount,
+                },
+            );
+
+            Ok(id)
+        })();
+
+        exit_lock(&env);
+        result
     }
 
     pub fn donate(
@@ -215,11 +236,14 @@ impl StellarGiveContract {
                 return Err(ContractError::CampaignNotActive);
             }
 
-            token::TokenClient::new(&env, &campaign.accepted_token).transfer(
-                &donor,
-                &env.current_contract_address(),
-                &amount,
-            );
+            // Use try_transfer so a failing token contract reverts the donation
+            // cleanly instead of propagating a raw panic.
+            if token::TokenClient::new(&env, &campaign.accepted_token)
+                .try_transfer(&donor, &env.current_contract_address(), &amount)
+                .is_err()
+            {
+                return Err(ContractError::TokenTransferFailed);
+            }
 
             campaign.raised_amount = campaign
                 .raised_amount
@@ -500,5 +524,141 @@ mod tests {
         let attacker = Address::generate(&env);
         let error = client.try_claim_funds(&attacker, &campaign_id);
         assert!(error.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #54 — token validation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn valid_sac_token_passes_validation() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin);
+        // Should not panic or return error.
+        validate_token_contract(&env, &token_id.address())
+            .expect("valid SAC should pass token validation");
+    }
+
+    #[test]
+    fn non_sac_contract_rejected_at_create_campaign() {
+        let env = Env::default();
+        env.mock_all_auths();
+        set_timestamp(&env, 1_000);
+
+        // Register the StellarGiveContract itself as the "token" — it has no
+        // decimals() or symbol(), so validation must fail.
+        let bogus_token = env.register_contract(None, StellarGiveContract);
+        let contract_id = env.register_contract(None, StellarGiveContract);
+        let client = StellarGiveContractClient::new(&env, &contract_id);
+
+        let creator = Address::generate(&env);
+        let beneficiary = Address::generate(&env);
+
+        let result = client.try_create_campaign(
+            &creator,
+            &beneficiary,
+            &String::from_str(&env, "Test"),
+            &100_000,
+            &5_000,
+            &bogus_token,
+        );
+        assert!(
+            result.is_err(),
+            "create_campaign must reject a non-SAC token"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #55 — reentrancy lock tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reentrancy_lock_blocks_concurrent_entry() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarGiveContract);
+
+        // Storage access must happen inside the contract's execution context.
+        env.as_contract(&contract_id, || {
+            assert!(enter_lock(&env).is_ok(), "first enter_lock should succeed");
+
+            let second = enter_lock(&env);
+            assert_eq!(
+                second,
+                Err(ContractError::ReentrancyDetected),
+                "second enter_lock must return ReentrancyDetected"
+            );
+
+            exit_lock(&env);
+            assert!(
+                enter_lock(&env).is_ok(),
+                "enter_lock must succeed after exit_lock"
+            );
+            exit_lock(&env);
+        });
+    }
+
+    #[test]
+    fn donate_blocked_when_lock_already_held() {
+        let (env, client, creator, beneficiary, donor, token_client, _) = setup();
+        set_timestamp(&env, 5_000);
+
+        let campaign_id = client.create_campaign(
+            &creator,
+            &beneficiary,
+            &String::from_str(&env, "Re-entry Test"),
+            &100_000,
+            &10_000,
+            &token_client.address,
+        );
+
+        // Set the lock from inside the contract context to simulate a held lock.
+        env.as_contract(&client.address, || {
+            env.storage().temporary().set(&lock_key(), &true);
+        });
+
+        let result = client.try_donate(&donor, &campaign_id, &1_000);
+        assert!(
+            result.is_err(),
+            "donate must fail when reentrancy lock is already held"
+        );
+
+        env.as_contract(&client.address, || {
+            env.storage().temporary().remove(&lock_key());
+        });
+    }
+
+    #[test]
+    fn create_campaign_blocked_when_lock_already_held() {
+        let env = Env::default();
+        env.mock_all_auths();
+        set_timestamp(&env, 1_000);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin);
+        let contract_id = env.register_contract(None, StellarGiveContract);
+        let client = StellarGiveContractClient::new(&env, &contract_id);
+
+        env.as_contract(&contract_id, || {
+            env.storage().temporary().set(&lock_key(), &true);
+        });
+
+        let result = client.try_create_campaign(
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &String::from_str(&env, "Test"),
+            &100_000,
+            &5_000,
+            &token_id.address(),
+        );
+        assert!(
+            result.is_err(),
+            "create_campaign must fail when reentrancy lock is already held"
+        );
+
+        env.as_contract(&contract_id, || {
+            env.storage().temporary().remove(&lock_key());
+        });
     }
 }
