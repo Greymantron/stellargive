@@ -69,7 +69,32 @@ Use Conventional Commits:
 - `fix: enforce accepted token check`
 - `chore: optimize frontend ci cache`
 
-## 6. Pull Request Template (Use in every PR)
+## 7. Recognition
+
+We recognize all types of contributions! We use the [all-contributors](https://all-contributors.js.org) specification.
+
+To add yourself or someone else to the contributors list, use the CLI in your PR or comment:
+```bash
+npx all-contributors add <username> <contribution-type>
+```
+Common contribution types:
+- `code`: Functional code
+- `doc`: Documentation
+- `bug`: Bug reports
+- `design`: UI/UX design
+- `ideas`: Feature requests & ideas
+- `test`: Adding or improving tests
+- `review`: Code reviews
+- `question`: Answering questions
+
+Example:
+```bash
+npx all-contributors add Feyisara2108 code,doc
+```
+
+The contributors table in `README.md` will be updated automatically on merge or can be generated manually with `npx all-contributors generate`.
+
+## 8. Pull Request Template (Use in every PR)
 
 ```md
 ## Summary
@@ -87,6 +112,9 @@ Use Conventional Commits:
 - [ ] cargo test
 - [ ] npm run lint
 - [ ] npm run build
+
+## Mainnet Readiness (Required for Mainnet-targeting PRs)
+- [ ] [Final Mainnet Audit Checklist](../docs/MAINNET_AUDIT_CHECKLIST.md) completed and signed off.
 
 ## Security impact
 - [ ] No security impact
