@@ -69,7 +69,36 @@ Use Conventional Commits:
 - `fix: enforce accepted token check`
 - `chore: optimize frontend ci cache`
 
-## 6. Pull Request Template (Use in every PR)
+## 6. Gas Estimation Guidelines
+
+Every new contract function added to the project must be checked for resource
+usage.  The goal is to keep individual transactions affordable for end users.
+
+**Targets:**
+| Operation | Expected fee (stroops) |
+|-----------|----------------------|
+| `create_campaign` | < 200 000 |
+| `donate` | < 300 000 |
+| `claim_funds` | < 300 000 |
+| Any new function | < 500 000 |
+
+**How to measure:**
+```bash
+stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --network testnet \
+  --simulate-only \
+  -- <function_name> [args...]
+```
+The `minResourceFee` field in the simulation response shows the fee in stroops.
+
+**Frontend guard:**
+`submitTransaction` in `src/lib/soroban.ts` will log a warning and trigger a
+`GasWarning` UI banner when the simulated fee exceeds `MAX_SIMULATION_FEE_STROOPS`
+(10 M stroops).  If your new function consistently triggers this warning, reduce
+its resource usage before merging.
+
+## 7. Pull Request Template (Use in every PR)
 
 ```md
 ## Summary
