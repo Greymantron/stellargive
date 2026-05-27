@@ -76,6 +76,8 @@ fn admin_key() -> Symbol {
 const FEE_BPS: i128 = 100;
 /// Basis-point denominator (10_000 = 100%).
 const FEE_DENOMINATOR: i128 = 10_000;
+/// Minimum permitted donation amount, in stroops (0.1 token with 7 decimals).
+const MIN_DONATION: i128 = 1_000_000;
 
 fn read_admin(env: &Env) -> Result<Address, ContractError> {
     env.storage()
@@ -340,7 +342,7 @@ impl StellarGiveContract {
         amount: i128,
     ) -> Result<(), ContractError> {
         donor.require_auth();
-        if amount <= 0 {
+        if amount < MIN_DONATION {
             return Err(ContractError::InvalidAmount);
         }
 
@@ -607,6 +609,26 @@ mod tests {
         let campaign_after_second = client.get_campaign(&campaign_id);
         assert_eq!(campaign_after_second.raised_amount, 100_000);
         assert_eq!(campaign_after_second.status, CampaignStatus::Funded);
+    }
+
+    #[test]
+    fn donate_rejects_sub_minimum_amount() {
+        let (env, client, creator, beneficiary, donor, _admin, token_client, _) = setup();
+        set_timestamp(&env, 1_000);
+
+        let mut bens = Vec::new(&env);
+        bens.push_back((beneficiary.clone(), 10_000_u32));
+        let campaign_id = client.create_campaign(
+            &creator,
+            &bens,
+            &String::from_str(&env, "Seed Relief"),
+            &100_000,
+            &10_000,
+            &token_client.address,
+        );
+
+        let result = client.try_donate(&donor, &campaign_id, &999_999);
+        assert!(result.is_err());
     }
 
     #[test]
