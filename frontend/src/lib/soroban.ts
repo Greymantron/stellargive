@@ -198,6 +198,7 @@ export async function submitTransaction(
   }
 
   if (txResult.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+    (txResult as any).hash = sendResponse.hash;
     return txResult;
   } else {
     throw new Error(`Transaction failed: ${txResult.status}`);
