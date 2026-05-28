@@ -33,7 +33,7 @@ export default function CampaignDetails({ params }: { params: { id: string } }) 
               )}
             </div>
           )}
-        </div>
+        </h1>
         {campaign && <ShareButton campaign={campaign} />}
       </div>
       

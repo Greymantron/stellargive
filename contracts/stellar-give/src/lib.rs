@@ -815,8 +815,6 @@ mod tests {
             &2_000,
             &token_client.address,
             &None,
-            &None,
-            &None,
         );
         assert!(result.is_ok(), "valid SAC token must be accepted");
     }
@@ -837,8 +835,6 @@ mod tests {
             &10_000_000,
             &2_000,
             &not_a_token,
-            &None,
-            &None,
             &None,
         );
         assert!(
@@ -1155,8 +1151,6 @@ mod tests {
                 &2_000,
                 &token_client.address,
                 &None,
-                &None,
-                &None,
             );
             assert_eq!(id, expected_id);
         }
@@ -1284,8 +1278,6 @@ mod tests {
             &20_000,
             &token_client.address,
             &None,
-            &None,
-            &None,
         );
         client.donate(&donor, &campaign_id, &gross, &false);
 
@@ -1374,8 +1366,6 @@ mod tests {
             &2_000,
             &token_client.address,
             &None,
-            &None,
-            &None,
         );
         assert_eq!(result, Err(Ok(ContractError::TargetTooLow)));
     }
@@ -1397,8 +1387,6 @@ mod tests {
             &2_000,
             &token_client.address,
             &None,
-            &None,
-            &None,
         );
         assert_eq!(result, Err(Ok(ContractError::InvalidMetadataUri)));
 
@@ -1414,8 +1402,6 @@ mod tests {
             &MIN_TARGET,
             &2_000,
             &token_client.address,
-            &None,
-            &None,
             &None,
         );
         assert_eq!(result, Err(Ok(ContractError::MetadataUriTooLong)));
@@ -1439,8 +1425,6 @@ mod tests {
             &2_000,
             &token_client.address,
             &Some(cap),
-            &None,
-            &None,
         );
 
         // First donation within cap
@@ -1468,8 +1452,6 @@ mod tests {
             &10_000_000,
             &10_000,
             &token_client.address,
-            &None,
-            &None,
             &None,
         );
 
@@ -1539,8 +1521,6 @@ mod tests {
             &10_000,
             &token_client.address,
             &None,
-            &None,
-            &None,
         );
 
         client.donate(&donor, &campaign_id, &1_000_000, &false);
@@ -1569,64 +1549,5 @@ mod tests {
         let top = client.get_top_donors(&campaign_id);
         assert_eq!(top.len(), 1);
         assert_eq!(top.get(0).unwrap().0, donor);
-    }
-
-    #[test]
-    fn create_campaign_validates_social_links() {
-        let (env, client, creator, beneficiary, _donor, _admin, token_client, _) = setup();
-        set_timestamp(&env, 1_000);
-
-        let bens = single_ben(&env, &beneficiary);
-
-        // Valid https links are accepted
-        let result_ok = client.try_create_campaign(
-            &creator,
-            &bens,
-            &String::from_str(&env, "Valid Links Campaign"),
-            &String::from_str(&env, "https://example.com/meta"),
-            &10_000_000,
-            &2_000,
-            &token_client.address,
-            &None,
-            &Some(String::from_str(&env, "https://mywebsite.com")),
-            &Some(String::from_str(&env, "https://twitter.com/myhandle")),
-        );
-        assert!(
-            result_ok.is_ok(),
-            "valid https social links must be accepted"
-        );
-
-        // Invalid website link (non-https) is rejected
-        let result_err_web = client.try_create_campaign(
-            &creator,
-            &bens,
-            &String::from_str(&env, "Invalid Link Campaign"),
-            &String::from_str(&env, "https://example.com/meta"),
-            &10_000_000,
-            &2_000,
-            &token_client.address,
-            &None,
-            &Some(String::from_str(&env, "http://mywebsite.com")),
-            &None,
-        );
-        assert!(
-            result_err_web.is_err(),
-            "non-https website must be rejected"
-        );
-
-        // Invalid twitter link (non-https) is rejected
-        let result_err_tw = client.try_create_campaign(
-            &creator,
-            &bens,
-            &String::from_str(&env, "Invalid Link Campaign"),
-            &String::from_str(&env, "https://example.com/meta"),
-            &10_000_000,
-            &2_000,
-            &token_client.address,
-            &None,
-            &None,
-            &Some(String::from_str(&env, "twitter.com/myhandle")),
-        );
-        assert!(result_err_tw.is_err(), "non-https twitter must be rejected");
     }
 }

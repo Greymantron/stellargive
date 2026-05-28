@@ -1009,8 +1009,6 @@
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                 },
-                "void",
-                "void",
                 "void"
               ]
             }
@@ -1191,8 +1189,6 @@
                     {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                     },
-                    "void",
-                    "void",
                     "void"
                   ]
                 }
