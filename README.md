@@ -102,6 +102,29 @@ docs/                    Security, deployment, architecture, contributing docs
 - Deployment: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)
 - Contributing: [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md)
 - Video Transcript: [`docs/VIDEO_TRANSCRIPT.md`](./docs/VIDEO_TRANSCRIPT.md)
+- Litepaper: [`docs/WHITEPAPER.md`](./docs/WHITEPAPER.md)
+
+## Roadmap
+
+### Q3 2026 (Near-term)
+
+- [ ] Multi-token donation support ([#10](https://github.com/Nursca/stellargive/issues/10))
+- [ ] Campaign categories and search ([#15](https://github.com/Nursca/stellargive/issues/15), [#37](https://github.com/Nursca/stellargive/issues/37))
+- [ ] Mobile-responsive UI ([#46](https://github.com/Nursca/stellargive/issues/46))
+
+### Q4 2026 (Mid-term)
+
+- [ ] Recurring donations (subscription model)
+- [ ] DAO governance for platform upgrades
+- [ ] Analytics dashboard for creators
+
+### Q1-Q2 2027 (Long-term)
+
+- [ ] Mobile app (React Native)
+- [ ] Cross-chain bridge for Ethereum donations
+- [ ] Grant program for non-profit onboarding
+
+> Roadmap items are aspirational and may change based on community feedback and implementation feasibility.
 
 ## Contributor Onboarding
 

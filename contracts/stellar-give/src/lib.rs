@@ -43,6 +43,13 @@ pub struct Campaign {
     pub twitter: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct Update {
+    pub content: String,
+    pub timestamp: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracterror]
 #[repr(u32)]
@@ -68,6 +75,10 @@ pub enum ContractError {
     InvalidMetadataUri = 19,
     MetadataUriTooLong = 20,
     InvalidUrl = 21,
+    ArithmeticError = 22,
+    LimitExceeded = 23,
+    InvalidTitle = 24,
+    CreationFeeTransferFailed = 25,
 }
 
 fn next_id_key() -> Symbol {
@@ -93,6 +104,14 @@ const MIN_TARGET: i128 = 10_000_000;
 /// Maximum campaign lifetime: one year. This keeps campaign state timely and
 /// avoids indefinite ledger growth from stale fundraising records.
 const MAX_DURATION: u64 = 31_536_000;
+/// Storage bloat guard: maximum campaigns per creator address.
+const MAX_CAMPAIGNS_PER_CREATOR: u32 = 10;
+/// Storage bloat guard: title length cap.
+const MAX_TITLE_LEN: u32 = 50;
+/// Storage bloat guard: metadata URI length cap.
+const MAX_METADATA_URI_LEN: u32 = 256;
+/// Fixed creation fee in stroops, sent to platform admin.
+const CREATION_FEE_STROOPS: i128 = 100_000;
 
 fn read_admin(env: &Env) -> Result<Address, ContractError> {
     env.storage()
@@ -188,6 +207,23 @@ fn donor_contribution_key(campaign_id: u64, donor: &Address) -> (Symbol, u64, Ad
     (symbol_short!("DCON"), campaign_id, donor.clone())
 }
 
+fn creator_campaign_count_key(creator: &Address) -> (Symbol, Address) {
+    (symbol_short!("CCNT"), creator.clone())
+}
+
+fn read_creator_campaign_count(env: &Env, creator: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&creator_campaign_count_key(creator))
+        .unwrap_or(0)
+}
+
+fn write_creator_campaign_count(env: &Env, creator: &Address, count: u32) {
+    env.storage()
+        .persistent()
+        .set(&creator_campaign_count_key(creator), &count);
+}
+
 fn read_donor_contribution(env: &Env, campaign_id: u64, donor: &Address) -> i128 {
     env.storage()
         .persistent()
@@ -201,7 +237,12 @@ fn write_donor_contribution(env: &Env, campaign_id: u64, donor: &Address, amount
         .set(&donor_contribution_key(campaign_id, donor), &amount);
 }
 
-fn update_top_donors(env: &Env, campaign_id: u64, donor: &Address, amount: i128) {
+fn update_top_donors(
+    env: &Env,
+    campaign_id: u64,
+    donor: &Address,
+    amount: i128,
+) -> Result<(), ContractError> {
     let old = read_top_donors(env, campaign_id);
     let mut new_donors: Vec<(Address, i128)> = Vec::new(env);
 
@@ -209,7 +250,9 @@ fn update_top_donors(env: &Env, campaign_id: u64, donor: &Address, amount: i128)
     let mut cumulative = amount;
     for (addr, prev) in old.iter() {
         if addr == *donor {
-            cumulative = prev.saturating_add(amount);
+            cumulative = prev
+                .checked_add(amount)
+                .ok_or(ContractError::ArithmeticError)?;
         } else {
             new_donors.push_back((addr, prev));
         }
@@ -232,6 +275,7 @@ fn update_top_donors(env: &Env, campaign_id: u64, donor: &Address, amount: i128)
         }
         write_top_donors(env, campaign_id, &new_donors);
     }
+    Ok(())
 }
 
 fn enter_lock(env: &Env) -> Result<(), ContractError> {
@@ -286,7 +330,7 @@ fn sync_status(env: &Env, campaign: &mut Campaign) {
 #[allow(clippy::manual_range_contains)]
 fn validate_url(url: &String) -> Result<(), ContractError> {
     let len = url.len() as usize;
-    if len < 8 || len > 200 {
+    if !(8..=200).contains(&len) {
         return Err(ContractError::InvalidUrl);
     }
     let mut buf = [0u8; 200];
@@ -354,10 +398,13 @@ impl StellarGiveContract {
         if title.is_empty() {
             return Err(ContractError::EmptyTitle);
         }
+        if title.len() > MAX_TITLE_LEN {
+            return Err(ContractError::InvalidTitle);
+        }
         if target_amount < MIN_TARGET {
             return Err(ContractError::TargetTooLow);
         }
-        if metadata_uri.len() > 256 {
+        if metadata_uri.len() > MAX_METADATA_URI_LEN {
             return Err(ContractError::MetadataUriTooLong);
         }
 
@@ -395,6 +442,20 @@ impl StellarGiveContract {
         // before persisting it. A non-compliant contract would brick the campaign.
         validate_token_contract(&env, &accepted_token)?;
 
+        let creator_campaigns = read_creator_campaign_count(&env, &creator);
+        if creator_campaigns >= MAX_CAMPAIGNS_PER_CREATOR {
+            return Err(ContractError::LimitExceeded);
+        }
+
+        // Small creation fee discourages campaign spam and storage bloat.
+        let admin = read_admin(&env)?;
+        if token::Client::new(&env, &accepted_token)
+            .try_transfer(&creator, &admin, &CREATION_FEE_STROOPS)
+            .is_err()
+        {
+            return Err(ContractError::CreationFeeTransferFailed);
+        }
+
         if beneficiaries.is_empty() {
             return Err(ContractError::InvalidShares);
         }
@@ -427,6 +488,10 @@ impl StellarGiveContract {
         };
 
         write_campaign(&env, &campaign);
+        let updated_campaign_count = creator_campaigns
+            .checked_add(1)
+            .ok_or(ContractError::ArithmeticError)?;
+        write_creator_campaign_count(&env, &creator, updated_campaign_count);
         env.events().publish(
             (symbol_short!("created"),),
             CreatedEvent {
@@ -469,7 +534,7 @@ impl StellarGiveContract {
                 let current_total = read_donor_contribution(&env, campaign_id, &donor);
                 if current_total
                     .checked_add(amount)
-                    .ok_or(ContractError::InvalidAmount)?
+                    .ok_or(ContractError::ArithmeticError)?
                     > cap
                 {
                     return Err(ContractError::ExceedsDonorCap);
@@ -487,13 +552,13 @@ impl StellarGiveContract {
 
             let new_donor_total = read_donor_contribution(&env, campaign_id, &donor)
                 .checked_add(amount)
-                .ok_or(ContractError::InvalidAmount)?;
+                .ok_or(ContractError::ArithmeticError)?;
             write_donor_contribution(&env, campaign_id, &donor, new_donor_total);
 
             campaign.raised_amount = campaign
                 .raised_amount
                 .checked_add(amount)
-                .ok_or(ContractError::InvalidAmount)?;
+                .ok_or(ContractError::ArithmeticError)?;
 
             campaign.status = if campaign.raised_amount >= campaign.target_amount {
                 CampaignStatus::Funded
@@ -512,7 +577,7 @@ impl StellarGiveContract {
                 donor.clone()
             };
 
-            update_top_donors(&env, campaign_id, &event_donor, amount);
+            update_top_donors(&env, campaign_id, &event_donor, amount)?;
             env.events().publish(
                 (symbol_short!("donation"), symbol_short!("received")),
                 (
@@ -638,6 +703,46 @@ impl StellarGiveContract {
     ) -> Result<Vec<(Address, i128)>, ContractError> {
         read_campaign(&env, campaign_id)?;
         Ok(read_top_donors(&env, campaign_id))
+    }
+
+    /// Adds an update to a campaign. Maximum 10 updates allowed.
+    pub fn add_update(env: Env, id: u64, content: String) -> Result<(), ContractError> {
+        let campaign = read_campaign(&env, id)?;
+        campaign.creator.require_auth();
+
+        if content.is_empty() {
+            return Err(ContractError::InvalidUpdateContent);
+        }
+
+        let count = read_update_count(&env, id);
+        if count >= 10 {
+            return Err(ContractError::TooManyUpdates);
+        }
+
+        let update = Update {
+            content,
+            timestamp: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&update_key(id, count), &update);
+
+        write_update_count(&env, id, count + 1);
+
+        Ok(())
+    }
+
+    /// Retrieves all updates for a campaign in chronological order.
+    pub fn get_updates(env: Env, id: u64) -> Vec<Update> {
+        let count = read_update_count(&env, id);
+        let mut updates = Vec::new(&env);
+        for i in 0..count {
+            if let Some(update) = env.storage().persistent().get(&update_key(id, i)) {
+                updates.push_back(update);
+            }
+        }
+        updates
     }
 }
 
@@ -925,6 +1030,34 @@ mod tests {
 
         let result = client.try_donate(&donor, &campaign_id, &(MIN_DONATION - 1), &false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn donate_detects_overflow_and_returns_arithmetic_error() {
+        let (env, client, creator, beneficiary, donor, _admin, token_client, _) = setup();
+        set_timestamp(&env, 1_000);
+
+        let bens = single_ben(&env, &beneficiary);
+        let campaign_id = client.create_campaign(
+            &creator,
+            &bens,
+            &String::from_str(&env, "Overflow Guard"),
+            &String::from_str(&env, "https://example.com/meta"),
+            &10_000_000,
+            &10_000,
+            &token_client.address,
+            &None,
+            &None,
+            &None,
+        );
+
+        // Seed campaign state near i128::MAX to exercise checked_add in donate path.
+        let mut campaign = read_campaign(&env, campaign_id).unwrap();
+        campaign.raised_amount = i128::MAX - (MIN_DONATION - 1);
+        write_campaign(&env, &campaign);
+
+        let result = client.try_donate(&donor, &campaign_id, &MIN_DONATION, &false);
+        assert_eq!(result, Err(Ok(ContractError::ArithmeticError)));
     }
 
     // -----------------------------------------------------------------------
@@ -1442,6 +1575,80 @@ mod tests {
             &None,
         );
         assert_eq!(result, Err(Ok(ContractError::MetadataUriTooLong)));
+    }
+
+    #[test]
+    fn create_campaign_enforces_title_length_limit() {
+        let (env, client, creator, beneficiary, _donor, _admin, token_client, _) = setup();
+        set_timestamp(&env, 1_000);
+        let bens = single_ben(&env, &beneficiary);
+
+        let valid_title = String::from_str(&env, "12345678901234567890123456789012345678901234567890");
+        let ok = client.try_create_campaign(
+            &creator,
+            &bens,
+            &valid_title,
+            &String::from_str(&env, "https://example.com/meta"),
+            &MIN_TARGET,
+            &2_000,
+            &token_client.address,
+            &None,
+            &None,
+            &None,
+        );
+        assert!(ok.is_ok(), "title of 50 chars should be accepted");
+
+        let too_long_title =
+            String::from_str(&env, "123456789012345678901234567890123456789012345678901");
+        let err = client.try_create_campaign(
+            &creator,
+            &bens,
+            &too_long_title,
+            &String::from_str(&env, "https://example.com/meta"),
+            &MIN_TARGET,
+            &2_000,
+            &token_client.address,
+            &None,
+            &None,
+            &None,
+        );
+        assert_eq!(err, Err(Ok(ContractError::InvalidTitle)));
+    }
+
+    #[test]
+    fn create_campaign_enforces_creator_campaign_limit() {
+        let (env, client, creator, beneficiary, _donor, _admin, token_client, _) = setup();
+        set_timestamp(&env, 1_000);
+        let bens = single_ben(&env, &beneficiary);
+
+        for _ in 0..MAX_CAMPAIGNS_PER_CREATOR {
+            let _ = client.create_campaign(
+                &creator,
+                &bens,
+                &String::from_str(&env, "Cap Test"),
+                &String::from_str(&env, "https://example.com/meta"),
+                &MIN_TARGET,
+                &2_000,
+                &token_client.address,
+                &None,
+                &None,
+                &None,
+            );
+        }
+
+        let result = client.try_create_campaign(
+            &creator,
+            &bens,
+            &String::from_str(&env, "Cap Test Overflow"),
+            &String::from_str(&env, "https://example.com/meta"),
+            &MIN_TARGET,
+            &2_000,
+            &token_client.address,
+            &None,
+            &None,
+            &None,
+        );
+        assert_eq!(result, Err(Ok(ContractError::LimitExceeded)));
     }
 
     #[test]
