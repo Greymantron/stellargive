@@ -992,6 +992,22 @@ impl StellarGiveContract {
         Ok(read_top_donors(&env, campaign_id))
     }
 
+    /// Returns the time remaining until the campaign deadline in seconds.
+    /// 
+    /// Returns 0 if the deadline has passed, otherwise returns the number of seconds
+    /// until the deadline. This is a read-only function that requires no authentication.
+    #[readonly]
+    pub fn get_time_left(env: Env, campaign_id: u64) -> Result<u64, ContractError> {
+        let campaign = read_campaign(&env, campaign_id)?;
+        let now = env.ledger().timestamp();
+        
+        if now >= campaign.deadline {
+            Ok(0)
+        } else {
+            Ok(campaign.deadline - now)
+        }
+    }
+
     /// Adds an update to a campaign. Maximum 10 updates allowed.
     pub fn add_update(env: Env, id: u64, content: String) -> Result<(), ContractError> {
         let campaign = read_campaign(&env, id)?;
@@ -4014,6 +4030,131 @@ mod tests {
             assert_eq!(ben1_after - ben1_before, ben1_payout);
             assert_eq!(ben2_after - ben2_before, ben2_payout);
             assert_eq!(ben3_after - ben3_before, ben3_payout);
+        }
+
+        #[test]
+        fn get_time_left_returns_zero_when_deadline_passed() {
+            let (env, client, creator, beneficiary, _donor, _admin, token_client, _) = setup();
+            set_timestamp(&env, 1_000);
+
+            let bens = single_ben(&env, &beneficiary);
+            let campaign_id = client.create_campaign(
+                &creator,
+                &bens,
+                &String::from_str(&env, "Time Test"),
+                &String::from_str(&env, "https://example.com/meta"),
+                &symbol_short!("relief"),
+                &10_000_000,
+                &2_000,  // deadline at 2000
+                &token_client.address,
+                &None,
+            );
+
+            // Move time past deadline
+            set_timestamp(&env, 3_000);
+
+            let time_left = client.get_time_left(&campaign_id).unwrap();
+            assert_eq!(time_left, 0);
+        }
+
+        #[test]
+        fn get_time_left_returns_positive_delta_before_deadline() {
+            let (env, client, creator, beneficiary, _donor, _admin, token_client, _) = setup();
+            set_timestamp(&env, 1_000);
+
+            let bens = single_ben(&env, &beneficiary);
+            let deadline = 5_000u64;
+            let campaign_id = client.create_campaign(
+                &creator,
+                &bens,
+                &String::from_str(&env, "Time Test Future"),
+                &String::from_str(&env, "https://example.com/meta"),
+                &symbol_short!("relief"),
+                &10_000_000,
+                &deadline,
+                &token_client.address,
+                &None,
+            );
+
+            let time_left = client.get_time_left(&campaign_id).unwrap();
+            assert_eq!(time_left, 4_000);  // 5000 - 1000
+        }
+
+        #[test]
+        fn get_time_left_at_exact_deadline_returns_zero() {
+            let (env, client, creator, beneficiary, _donor, _admin, token_client, _) = setup();
+            set_timestamp(&env, 1_000);
+
+            let bens = single_ben(&env, &beneficiary);
+            let deadline = 5_000u64;
+            let campaign_id = client.create_campaign(
+                &creator,
+                &bens,
+                &String::from_str(&env, "Exact Deadline"),
+                &String::from_str(&env, "https://example.com/meta"),
+                &symbol_short!("relief"),
+                &10_000_000,
+                &deadline,
+                &token_client.address,
+                &None,
+            );
+
+            // Move to exact deadline
+            set_timestamp(&env, 5_000);
+
+            let time_left = client.get_time_left(&campaign_id).unwrap();
+            assert_eq!(time_left, 0);
+        }
+
+        #[test]
+        fn get_time_left_rejects_nonexistent_campaign() {
+            let (env, client, _creator, _beneficiary, _donor, _admin, _token_client, _) = setup();
+
+            let result = client.try_get_time_left(&9_999u64);
+            assert!(result.is_err(), "get_time_left must reject nonexistent campaigns");
+            assert_eq!(
+                result.unwrap_err().unwrap(),
+                ContractError::CampaignNotFound
+            );
+        }
+
+        #[test]
+        fn get_time_left_updates_as_time_progresses() {
+            let (env, client, creator, beneficiary, _donor, _admin, token_client, _) = setup();
+            set_timestamp(&env, 1_000);
+
+            let bens = single_ben(&env, &beneficiary);
+            let deadline = 10_000u64;
+            let campaign_id = client.create_campaign(
+                &creator,
+                &bens,
+                &String::from_str(&env, "Progressive Time"),
+                &String::from_str(&env, "https://example.com/meta"),
+                &symbol_short!("relief"),
+                &10_000_000,
+                &deadline,
+                &token_client.address,
+                &None,
+            );
+
+            // Check time at start
+            let time_left_1 = client.get_time_left(&campaign_id).unwrap();
+            assert_eq!(time_left_1, 9_000);
+
+            // Move forward
+            set_timestamp(&env, 5_000);
+            let time_left_2 = client.get_time_left(&campaign_id).unwrap();
+            assert_eq!(time_left_2, 5_000);
+
+            // Move closer
+            set_timestamp(&env, 9_000);
+            let time_left_3 = client.get_time_left(&campaign_id).unwrap();
+            assert_eq!(time_left_3, 1_000);
+
+            // Pass deadline
+            set_timestamp(&env, 15_000);
+            let time_left_4 = client.get_time_left(&campaign_id).unwrap();
+            assert_eq!(time_left_4, 0);
         }
     }
 }
