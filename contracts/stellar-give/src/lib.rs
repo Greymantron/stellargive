@@ -61,6 +61,14 @@ pub struct AutoClaimedEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
+pub struct ClaimedEvent {
+    pub campaign_id: u64,
+    pub amount: i128,
+    pub beneficiary: Address,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
 pub struct Campaign {
     pub id: u64,
     pub creator: Address,
@@ -783,7 +791,7 @@ impl StellarGiveContract {
                 // Emit AutoClaimed event for the first beneficiary
                 let (first_beneficiary, _) = campaign.beneficiaries.get(0).unwrap();
                 env.events().publish(
-                    (symbol_short!("autoclaimed"),),
+                    (Symbol::new(&env, "autoclaimed"),),
                     AutoClaimedEvent {
                         campaign_id: campaign.id,
                         total_raised,
@@ -1033,7 +1041,6 @@ impl StellarGiveContract {
     ///
     /// This value is derived from the NEXT_ID storage key and reflects all campaigns
     /// created, including expired or cancelled campaigns.
-    #[readonly]
     pub fn get_total_campaigns(env: Env) -> u64 {
         let next_id = read_next_id(&env);
         next_id.saturating_sub(1)
@@ -1052,7 +1059,6 @@ impl StellarGiveContract {
     ///
     /// Returns 0 if the deadline has passed, otherwise returns the number of seconds
     /// until the deadline. This is a read-only function that requires no authentication.
-    #[readonly]
     pub fn get_time_left(env: Env, campaign_id: u64) -> Result<u64, ContractError> {
         let campaign = read_campaign(&env, campaign_id)?;
         let now = env.ledger().timestamp();
@@ -1075,7 +1081,7 @@ impl StellarGiveContract {
 
         // Batch write whitelist entries
         for addr in addresses.iter() {
-            write_whitelist(&env, id, addr, true);
+            write_whitelist(&env, id, &addr, true);
         }
 
         Ok(())

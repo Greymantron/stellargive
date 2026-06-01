@@ -187,35 +187,35 @@ To prevent Cross-Site Scripting (XSS) and injection attacks, adhere to the follo
 
 ## 10. Pre-commit Hooks (Recommended)
 
-To catch lint and formatting issues before they reach CI, set up Husky locally:
+To catch lint and formatting issues before they reach CI, we use Husky and `lint-staged` to automatically check only your modified files before every commit.
+
+### 1. Setup Hook Tools
+Run the following command at the repository root to install and configure the Git pre-commit hooks:
 
 ```bash
-# Install Husky
-npx husky init
-
-# Create a pre-commit hook that runs linters
-cat > .husky/pre-commit << 'EOF'
-#!/usr/bin/env sh
-. "$(dirname "$0")/_/husky.sh"
-
-cd frontend && npm run lint && npx prettier --check .
-cd ../contracts/stellar-give && cargo fmt --check && cargo clippy -- -D warnings
-EOF
-
-chmod +x .husky/pre-commit
+npm run prepare
 ```
 
-This runs the same checks as CI before every commit. If any check fails, the commit is aborted until the issue is fixed.
+This command automatically initializes Husky in the workspace.
 
-Alternatively, run the checks manually before pushing:
+### 2. Standard Workflow
+Once installed, when you run `git commit`, `lint-staged` will automatically run:
+- `eslint` and `prettier --check` on any modified frontend files (`.js`, `.jsx`, `.ts`, `.tsx`).
+- `cargo fmt --check` on any modified smart contract files (`.rs`).
+
+If any checks fail, the commit is aborted with a clear error output so you can fix the issue locally before pushing.
+
+### 3. Running Checks Manually
+If you want to run the linters manually before committing or pushing:
 
 ```bash
-# Contract checks
+# Run format/lint checks on all files in frontend
+cd frontend && npm run lint && npx prettier --check .
+
+# Run formatting checks on the contract
 cd contracts/stellar-give && cargo fmt --check && cargo clippy -- -D warnings
-
-# Frontend checks
-cd frontend && npm run lint && npx prettier --check .
 ```
+
 
 ## DevOps & Infrastructure
 
