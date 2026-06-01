@@ -93,16 +93,41 @@ Outputs:
 - `frontend/src/lib/contract/abi.json`
 - `frontend/src/lib/contract/abi.ts`
 
-## 7. Frontend Deployment (Vercel)
+## 7. Frontend Deployment & Preview Environments (Vercel)
 
-1. Import repository in Vercel.
-2. Set project root to `frontend`.
-3. Configure environment variables:
-   - `NEXT_PUBLIC_SOROBAN_RPC_URL`
-   - `NEXT_PUBLIC_CONTRACT_ADDRESS`
-   - `STELLAR_NETWORK_PASSPHRASE` (if required by runtime code)
-4. Build command: `npm run build`
-5. Output: Next.js default output (App Router, non-static unless explicitly configured)
+Rapid feedback requires robust preview environments. To configure Vercel with auto-deploying Pull Request (PR) previews using isolated testnet parameters:
+
+### 1. Link Repository & Set Framework
+1. Log in to the Vercel Dashboard, click **Add New** > **Project**, and import your GitHub repository.
+2. Select **Next.js** as the Framework Preset.
+3. Keep the root directory set to `frontend`.
+
+### 2. Configure Environment Variables per Environment
+Vercel allows assigning environment variables to specific target environments (**Production**, **Preview**, and **Development**). Use this isolation to ensure preview URLs point to Stellar Testnet contracts, while the main production site targets the Mainnet contract:
+
+| Environment Variable | Target Environment | Value / Source |
+|---|---|---|
+| `NEXT_PUBLIC_CONTRACT_ID` | **Preview** & **Development** | Testnet Contract ID (e.g., `CB6...`) |
+| `NEXT_PUBLIC_CONTRACT_ID` | **Production** | Mainnet Contract ID (e.g., `CC...`) |
+| `NEXT_PUBLIC_SOROBAN_RPC_URL` | **Preview** & **Development** | Testnet RPC: `https://soroban-testnet.stellar.org` |
+| `NEXT_PUBLIC_SOROBAN_RPC_URL` | **Production** | Mainnet RPC / custom production endpoint |
+| `NEXT_PUBLIC_NETWORK_PASSPHRASE` | **Preview** & **Development** | `Test SDF Network ; September 2015` |
+| `NEXT_PUBLIC_NETWORK_PASSPHRASE` | **Production** | `Public Global Stellar Network ; October 2015` |
+
+Make sure to deselect the environments appropriately when adding each key to prevent preview URLs from pulling Mainnet configuration.
+
+### 3. Enable Preview Deployments in Vercel Git Settings
+1. In your Vercel project, go to **Settings** > **Git**.
+2. Under the **Preview Deployments** section, ensure auto-deployments are **Enabled** for all branch pushes except the production branch (`main`).
+
+### 4. Require Status Checks in GitHub
+To prevent merging un-verified PRs:
+1. In your GitHub repository, navigate to **Settings** > **Branches**.
+2. Click **Add Rule** under Branch Protection Rules (or edit the rule for `main`).
+3. Check **Require status checks to pass before merging**.
+4. Search for and check the **Vercel - Preview** status check.
+5. Save the protection rule. This requires any Pull Request to deploy successfully on Vercel before it can be merged.
+
 
 ## 8. Contract Upgrade Path
 
